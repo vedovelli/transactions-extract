@@ -32,7 +32,7 @@ Route::get('/dashboard', function () {
         return [
             ...$transaction->toArray(),
             'description' => Str::limit($transaction->description, 50),
-            'amount' => Number::currency($transaction->amount/100),
+            'amount' => Number::currency($transaction->amount / 100),
         ];
     });
 
@@ -41,50 +41,56 @@ Route::get('/dashboard', function () {
 
 Route::post('upload', function (Request $request) {
     defer(function () use ($request) {
-        $file = $request->file('file');
-        $path = $file->storeAs('transactions', $file->getClientOriginalName(), 's3');
-        $imageUrl = env('AWS_CDN_URL').'/'.$path;
+        try {
+            $file = $request->file('file');
+            $path = $file->storeAs('vedovelli/' . now()->timestamp, $file->getClientOriginalName(), 's3');
+            $imageUrl = env('AWS_CDN_URL') . '/' . $path;
 
-        $schema = new ObjectSchema(
-            name: 'extracted_transactions',
-            description: "User's transactions from a screengrab",
-            properties: [
-                new ArraySchema(
-                    name: 'transactions',
-                    description: "User's transactions from a screengrab",
-                    items: new ObjectSchema(
-                        name: 'transaction',
-                        description: 'A single transaction',
-                        properties: [
-                            new StringSchema('date', 'The transaction date in the format yyyy-mm-dd hh:ii:ss'),
-                            new StringSchema('description', 'The transaction description'),
-                            new NumberSchema('amount', 'The transaction amount in cents'),
-                        ],
-                        requiredFields: ['date', 'description', 'amount']
+            $schema = new ObjectSchema(
+                name: 'extracted_transactions',
+                description: "User's transactions from a screengrab",
+                properties: [
+                    new ArraySchema(
+                        name: 'transactions',
+                        description: "User's transactions from a screengrab",
+                        items: new ObjectSchema(
+                            name: 'transaction',
+                            description: 'A single transaction',
+                            properties: [
+                                new StringSchema('date', 'The transaction date in the format yyyy-mm-dd hh:ii:ss'),
+                                new StringSchema('description', 'The transaction description'),
+                                new NumberSchema('amount', 'The transaction amount in cents'),
+                            ],
+                            requiredFields: ['date', 'description', 'amount']
+                        )
+                    ),
+                ],
+                requiredFields: ['name', 'properties']
+            );
+
+            $message = new UserMessage(
+                "You're an agent specialized in identifying financial transaction on provided images. Extract financial transactions from the following screen grab:",
+                [
+                    Image::fromUrl(
+                        $imageUrl,
                     )
-                ),
-            ],
-            requiredFields: ['name', 'properties']
-        );
+                ]
+            );
 
-        $message = new UserMessage(
-            "You're an agent specialized in identifying financial transaction on provided images. Extract financial transactions from the following screen grab:",
-            [
-                Image::fromUrl(
-                    $imageUrl,
-                )
-            ]
-        );
+            $response = Prism::structured()
+                ->using(Provider::OpenAI, 'gpt-4o-mini')
+                ->withSchema($schema)
+                ->withMessages([$message])
+                ->generate();
 
-        $response = Prism::structured()
-            ->using(Provider::OpenAI, 'gpt-4o-mini')
-            ->withSchema($schema)
-            ->withMessages([$message])
-            ->generate();
+            $transactions = $response->structured['properties']['transactions'] ?? $response->structured['transactions'];
 
-        collect($response->structured['transactions'])->each(function ($transaction)  {
-            Transaction::create($transaction);
-        });
+            collect($transactions)->each(function ($transaction) {
+                Transaction::create($transaction);
+            });
+        } catch (\Exception $e) {
+            ray($e);
+        }
     });
 
     return back();
@@ -96,4 +102,4 @@ Route::middleware('auth')->group(function () {
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 });
 
-require __DIR__.'/auth.php';
+require __DIR__ . '/auth.php';
