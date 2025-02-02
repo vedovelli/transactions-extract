@@ -2,18 +2,18 @@
 
 use App\Http\Controllers\ProfileController;
 use App\Models\Transaction;
+use EchoLabs\Prism\Enums\Provider;
+use EchoLabs\Prism\Prism;
 use EchoLabs\Prism\Schema\ArraySchema;
 use EchoLabs\Prism\Schema\NumberSchema;
+use EchoLabs\Prism\Schema\ObjectSchema;
+use EchoLabs\Prism\Schema\StringSchema;
 use EchoLabs\Prism\ValueObjects\Messages\Support\Image;
 use EchoLabs\Prism\ValueObjects\Messages\UserMessage;
 use Illuminate\Foundation\Application;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
-use EchoLabs\Prism\Prism;
-use EchoLabs\Prism\Enums\Provider;
-use EchoLabs\Prism\Schema\ObjectSchema;
-use EchoLabs\Prism\Schema\StringSchema;
 
 Route::get('/', function () {
     return Inertia::render('Welcome', [
@@ -24,77 +24,92 @@ Route::get('/', function () {
     ]);
 });
 
-Route::get('/dashboard', function () {
-    Number::useCurrency('BRL');
-    Number::useLocale('pt-BR');
+function seedTransactions(): void
+{
+    Transaction::truncate();
+    Transaction::factory()->count(10)->create();
+}
 
-    $transactions = Transaction::all()->map(function ($transaction) {
+function getTransactions()
+{
+    return Transaction::all()->map(function ($transaction) {
         return [
             ...$transaction->toArray(),
             'description' => Str::limit($transaction->description, 50),
             'amount' => Number::currency($transaction->amount / 100),
+            'date' => $transaction->created_at->format('d/m/Y'),
         ];
     });
+}
 
-    return Inertia::render('Dashboard', compact('transactions'));
+Route::get('/dashboard', function () {
+    //    seedTransactions();
+
+    return Inertia::render('Dashboard', ['transactions' => getTransactions()]);
+
 })->middleware(['auth', 'verified'])->name('dashboard');
 
+
+
 Route::post('upload', function (Request $request) {
-    defer(function () use ($request) {
-        try {
-            $file = $request->file('file');
-            $path = $file->storeAs('vedovelli/' . now()->timestamp, $file->getClientOriginalName(), 's3');
-            $imageUrl = env('AWS_CDN_URL') . '/' . $path;
+    try {
+        $file = $request->file(key: 'file');
 
-            $schema = new ObjectSchema(
-                name: 'extracted_transactions',
-                description: "User's transactions from a screengrab",
-                properties: [
-                    new ArraySchema(
-                        name: 'transactions',
-                        description: "User's transactions from a screengrab",
-                        items: new ObjectSchema(
-                            name: 'transaction',
-                            description: 'A single transaction',
-                            properties: [
-                                new StringSchema('date', 'The transaction date in the format yyyy-mm-dd hh:ii:ss'),
-                                new StringSchema('description', 'The transaction description'),
-                                new NumberSchema('amount', 'The transaction amount in cents'),
-                            ],
-                            requiredFields: ['date', 'description', 'amount']
-                        )
-                    ),
-                ],
-                requiredFields: ['name', 'properties']
-            );
+        $path = $file->storeAs('screencast/' . now()->timestamp, $file->getClientOriginalName(), 's3');
 
-            $message = new UserMessage(
-                "You're an agent specialized in identifying financial transaction on provided images. Extract financial transactions from the following screen grab:",
-                [
-                    Image::fromUrl(
-                        $imageUrl,
+        $fileUrl = config('app.cdn_url') . "/$path";
+
+        $schema = new ObjectSchema(
+            name: 'transactions_from_image',
+            description: 'A list of transactions from a screenshot',
+            properties: [
+                new ArraySchema(
+                    name: 'transactions',
+                    description: "User's transactions from a screengrab",
+                    items: new ObjectSchema(
+                        name: 'transaction',
+                        description: 'A single transaction',
+                        properties: [
+                            new StringSchema('description', 'The transaction description'),
+                            new NumberSchema('amount', 'The transaction amount in cents'),
+                        ],
+                        requiredFields: ['description', 'amount']
                     )
-                ]
-            );
+                )
+            ],
+            requiredFields: ['properties']
+        );
 
-            $response = Prism::structured()
-                ->using(Provider::OpenAI, 'gpt-4o-mini')
-                ->withSchema($schema)
-                ->withMessages([$message])
-                ->generate();
+        $userMessage = new UserMessage(
+            "You're an agent specialized in identifying financial transaction on provided images. Extract financial transactions from the following screenshot:",
+            [
+                Image::fromUrl($fileUrl)
+            ]
+        );
 
-            $transactions = $response->structured['properties']['transactions'] ?? $response->structured['transactions'];
+        $response = Prism::structured()
+            ->using(Provider::OpenAI, 'gpt-4o-mini')
+            ->withSchema($schema)
+            ->withMessages([$userMessage])
+            ->generate();
 
-            collect($transactions)->each(function ($transaction) {
-                Transaction::create($transaction);
-            });
-        } catch (\Exception $e) {
-            ray($e);
-        }
-    });
+        $structured = $response->structured;
+
+        collect($structured['transactions'])->each(function ($transaction) {
+            Transaction::create([
+                ...$transaction,
+                'date' => now()
+            ]);
+        });
+
+    } catch (Exception $exception) {
+        Log::error($exception->getMessage());
+    }
 
     return back();
 });
+
+
 
 Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

@@ -1,16 +1,14 @@
-import { router, usePoll } from '@inertiajs/react';
 import { ImagePlus, Send, X } from 'lucide-react';
 
 import { Button } from '@/Components/ui/button';
 import { Card } from '@/Components/ui/card';
+import { router } from '@inertiajs/react';
 import { useState } from 'react';
-
+import { Loader } from 'lucide-react';
 export function ImageUploadContainer() {
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
     const [file, setFile] = useState<File | null>(null);
-    usePoll(2000, {
-        only: ['transactions'],
-    });
+    const [loading, setLoading] = useState(false);
 
     const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
@@ -42,16 +40,41 @@ export function ImageUploadContainer() {
             },
             {
                 forceFormData: true,
-                onSuccess: () => {
-                    setSelectedImage(null);
-                    setFile(null);
+                fresh: true,
+                onFinish() {
+                    setLoading(false);
                 },
             },
         );
+
+        setLoading(true);
+        setFile(null);
+        setSelectedImage(null);
     };
 
     return (
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            {loading && (
+                <div className="absolute right-6 top-6">
+                    <Loader className="h-6 w-6 animate-spin" />
+                </div>
+            )}
+            {selectedImage && (
+                <div className="flex justify-end gap-2">
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={handleRemoveImage}
+                    >
+                        <X className="mr-2 h-4 w-4" />
+                        Remover Imagem
+                    </Button>
+                    <Button size="sm" type="submit">
+                        <Send className="mr-2 h-4 w-4" />
+                        Enviar Imagem
+                    </Button>
+                </div>
+            )}
             <Card className="flex min-h-[400px] flex-col items-center justify-center bg-white p-4">
                 {selectedImage ? (
                     <img
@@ -78,23 +101,6 @@ export function ImageUploadContainer() {
                     </label>
                 )}
             </Card>
-            {selectedImage && (
-                <div className="flex justify-end gap-2">
-                    <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={handleRemoveImage}
-                        type="button"
-                    >
-                        <X className="mr-2 h-4 w-4" />
-                        Remover Imagem
-                    </Button>
-                    <Button size="sm" type="submit">
-                        <Send className="mr-2 h-4 w-4" />
-                        Enviar Imagem
-                    </Button>
-                </div>
-            )}
         </form>
     );
 }
